@@ -29,44 +29,45 @@ app.post("/identify", upload.single("image"), async (req, res) => {
     const imageBase64 = req.file.buffer.toString("base64");
 
     // --- 1) Identificación del reloj ---
-    const identify = await client.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
+    const response = await client.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
         {
           role: "user",
           content: [
-            { type: "text", text: "Identify the brand, model and confidence of this watch. Return JSON { brand, model, confidence }" },
-            { type: "image_url", image_url: `data:image/jpeg;base64,${imageBase64}` }
+            {
+              type: "input_text",
+              text: "Identify the brand and model of this watch. Return JSON { brand, model, confidence }"
+            },
+            {
+              type: "input_image",
+              image_url: `data:image/jpeg;base64,${imageBase64}`
+            }
           ]
         }
       ]
     });
 
-    const result = JSON.parse(identify.choices[0].message.content);
+    const detectText = response.output_text;
+    const result = JSON.parse(detectText);
 
     // --- 2) Buscar precio ---
-    const price = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "user",
-          content: `Return approximate JSON { new_price, used_price } for this watch in euros: ${result.brand} ${result.model}`
-        }
-      ]
+    const priceRes = await client.responses.create({
+      model: "gpt-4.1-mini",
+      input: `Return approximate new_price and used_price in euros for this watch: ${result.brand} ${result.model} as JSON`
     });
 
-    const priceResult = JSON.parse(price.choices[0].message.content);
+    const priceText = priceRes.output_text;
+    const price = JSON.parse(priceText);
 
     res.json({
-      brand: result.brand || null,
-      model: result.model || null,
-      confidence: result.confidence || null,
-      new_price: priceResult.new_price || null,
-      used_price: priceResult.used_price || null
+      ...result,
+      new_price: price.new_price || null,
+      used_price: price.used_price || null
     });
 
   } catch (err) {
-    console.error("SERVER ERROR:", err);
+    console.error("BACKEND ERROR:", err);
     res.status(500).json({ error: "OpenAI API error", details: err.message });
   }
 });
