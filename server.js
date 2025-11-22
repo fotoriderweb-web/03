@@ -9,61 +9,71 @@ const upload = multer();
 app.use(cors());
 app.use(express.json());
 
-// Inicializa OpenAI con tu API Key desde variables de entorno
+// ---- OpenAI ----
 const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY
 });
 
-// ---- Endpoint para analizar imagen ----
+// ---- RUTA PRINCIPAL ----
+app.get("/", (req, res) => {
+  res.json({ ok: true, service: "RelojDetector backend" });
+});
+
+// ---- IDENTIFICAR RELOJ ----
 app.post("/identify", upload.single("image"), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: "No se ha subido ninguna imagen." });
+      return res.status(400).json({ error: "No image received" });
     }
 
-    // Convertimos la imagen a Base64
     const imageBase64 = req.file.buffer.toString("base64");
 
-    // Llamada a OpenAI (ejemplo: genera respuesta sobre la imagen)
+    // --- 1) Identificación del reloj ---
     const response = await client.responses.create({
-      model: "gpt-4.1-mini",
+      model: "gpt-4o-mini",
       input: [
         {
           role: "user",
-          content: `Analiza esta imagen: ${imageBase64}`,
-        },
-      ],
+          content: [
+            {
+              type: "input_text",
+              text:
+                "Identify brand and model of this watch. Return JSON {brand, model, confidence}"
+            },
+            {
+              type: "input_image",
+              image_url: `data:image/jpeg;base64,${imageBase64}`
+            }
+          ]
+        }
+      ]
     });
 
-    // Obtenemos el texto de la respuesta
-    let text = response.output_text || "";
+    const result = JSON.parse(response.output[0].content[0].text);
 
-    // Limpiamos posibles ```json y ``` de la respuesta
-    text = text.replace(/```json|```/g, "").trim();
+    // --- 2) Buscar precios ---
+    const priceResponse = await client.responses.create({
+      model: "gpt-4o-mini",
+      input: `Give approximate prices in euros. Return JSON { new_price, used_price } for: ${result.brand} ${result.model}`
+    });
 
-    let data;
-    try {
-      data = JSON.parse(text); // Intentamos parsear JSON
-    } catch (parseError) {
-      // Si no es JSON válido, devolvemos como texto
-      data = { text };
-    }
+    const price = JSON.parse(priceResponse.output[0].content[0].text);
 
-    res.json({ result: data });
+    res.json({
+      ...result,
+      new_price: price.new_price || null,
+      used_price: price.used_price || null
+    });
+
   } catch (err) {
     console.error("Error en /identify:", err);
-
-    // Manejo de errores específicos de OpenAI
-    if (err.code === "insufficient_quota") {
-      return res.status(429).json({ error: "Se ha excedido la cuota de OpenAI." });
-    }
-
     res.status(500).json({
-      error: "Ocurrió un error procesando la imagen. Intenta de nuevo más tarde.",
+      error: "OpenAI API error",
+      details: err.message
     });
   }
 });
 
-// Puerto dinámico para Render
+// ---- START ----
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Backend corriendo en puerto ${PORT}`));
+app.listen(PORT, () => console.log("Backend corriendo en puerto", PORT));
