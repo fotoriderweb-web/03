@@ -5,21 +5,20 @@ import OpenAI from "openai";
 
 const app = express();
 const upload = multer();
-
 app.use(cors());
 app.use(express.json());
 
-// ---- OpenAI ----
+// --- OpenAI ---
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// ---- RUTA PRINCIPAL ----
+// --- ROOT ---
 app.get("/", (req, res) => {
   res.json({ ok: true, service: "RelojDetector backend" });
 });
 
-// ---- IDENTIFICAR RELOJ ----
+// --- IDENTIFY ---
 app.post("/identify", upload.single("image"), async (req, res) => {
   try {
     if (!req.file) {
@@ -28,9 +27,9 @@ app.post("/identify", upload.single("image"), async (req, res) => {
 
     const imageBase64 = req.file.buffer.toString("base64");
 
-    // --- 1) Identificación del reloj ---
-    const response = await client.responses.create({
-      model: "gpt-4o-mini",
+    // --- DETECCIÓN ---
+    const identify = await client.responses.create({
+      model: "gpt-4.1",
       input: [
         {
           role: "user",
@@ -38,42 +37,52 @@ app.post("/identify", upload.single("image"), async (req, res) => {
             {
               type: "input_text",
               text:
-                "Identify brand and model of this watch. Return JSON {brand, model, confidence}"
+                "Return ONLY valid JSON. Identify brand, model and confidence. " +
+                "Do NOT include markdown. Format: {\"brand\":\"\",\"model\":\"\",\"confidence\":0}"
             },
-            {
-              type: "input_image",
-              image_url: `data:image/jpeg;base64,${imageBase64}`
-            }
+            { type: "input_image", image_url: `data:image/jpeg;base64,${imageBase64}` }
           ]
         }
       ]
     });
 
-    const result = JSON.parse(response.output[0].content[0].text);
+    // Extraer texto garantizado sin markdown
+    const rawIdentify = identify.output[0].content[0].text
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
 
-    // --- 2) Buscar precios ---
-    const priceResponse = await client.responses.create({
-      model: "gpt-4o-mini",
-      input: `Give approximate prices in euros. Return JSON { new_price, used_price } for: ${result.brand} ${result.model}`
+    const info = JSON.parse(rawIdentify);
+
+    // --- PRECIOS ---
+    const priceCall = await client.responses.create({
+      model: "gpt-4.1",
+      input: [
+        `Return ONLY JSON. Give estimated new_price and used_price in euros for the watch: ${info.brand} ${info.model}. Format: {"new_price":0,"used_price":0}`
+      ]
     });
 
-    const price = JSON.parse(priceResponse.output[0].content[0].text);
+    const rawPrice = priceCall.output[0].content[0].text
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+
+    const price = JSON.parse(rawPrice);
 
     res.json({
-      ...result,
+      brand: info.brand,
+      model: info.model,
+      confidence: info.confidence,
       new_price: price.new_price || null,
       used_price: price.used_price || null
     });
 
   } catch (err) {
     console.error("Error en /identify:", err);
-    res.status(500).json({
-      error: "OpenAI API error",
-      details: err.message
-    });
+    res.status(500).json({ error: "Server error", details: err.message });
   }
 });
 
-// ---- START ----
+// --- START ---
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log("Backend corriendo en puerto", PORT));
